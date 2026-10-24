@@ -1,0 +1,65 @@
+{% set versions = {
+    "3.3": "7d73a84d986e42f3fd608b6be35d15d4f5b363a00f9951b5f6f4adf97b6b3897"
+} %}
+
+{% set version = environ.get('COMMIT_VERSION', None) %}
+{% set version = version or versions.keys()|first %}
+{% set version = version|string %}
+
+package:
+  name: {{ environ.get('ANACONDA_PACKAGE', "troll")|string|lower }}
+  version: {{ environ.get('ANACONDA_VERSION', version)|replace("-", ".") }}
+
+source:
+  url: "https://www.roma1.infn.it/~bonvini/troll/downloads/TROLL.v{{ version }}.tgz"
+  {% if versions.get(version, None) %}
+  sha256: {{ versions.get(version) }}
+  {% endif %}
+
+build:
+  number: 0
+  skip: true  # [not linux]
+
+requirements:
+  build:
+    - {{ compiler('cxx') }}
+    - {{ compiler('fortran') }}
+    - {{ stdlib('c') }}
+    - make
+  host:
+    - lhapdf
+    - gsl
+    - cuba
+  run:
+    - {{ pin_compatible('lhapdf', max_pin='x.x') }}
+    - gsl
+    - cuba
+
+test:
+  commands:
+    - test -f $PREFIX/lib/libTROLL.a
+    - test -f $PREFIX/include/TROLL/src/resummation.hh
+    - troll-drellyan -h
+    - troll-dis -h
+
+about:
+  home: "https://www.roma1.infn.it/~bonvini/troll/"
+  license: LicenseRef-TROLL
+  license_family: OTHER
+  summary: "TROLL: threshold (large-x) resummation to N3LL' for Drell-Yan (mass and rapidity), DIS and Higgs"
+  description: |
+    TROLL Resums Only Large-x Logarithms. Threshold resummation up to N3LL',
+    matched to fixed order, for Drell-Yan (differential in invariant mass and
+    in rapidity of the lepton pair), neutral- and charged-current DIS (with
+    target mass corrections) and Higgs production. Authors: M. Bonvini,
+    L. Rottoli. Cite arXiv:1405.3654, 1412.3791, 1507.01006, 1603.08000.
+
+    Installs libTROLL.a, the headers under include/TROLL (compile with
+    -I$PREFIX/include/TROLL, as the upstream examples use -I./) and the
+    examples as troll-drellyan and troll-dis. The Higgs examples need ggHiggs
+    and are not built.
+  doc_url: "https://www.roma1.infn.it/~bonvini/troll/"
+
+extra:
+  recipe-maintainers:
+    - meiyasan
