@@ -13,7 +13,12 @@ TROLL: threshold (large-x) resummation to N3LL' for Drell-Yan (mass and rapidity
 
 ## Architectures
 
-State per architecture: see the platforms badge above or [anaconda.org/hep-forge/troll](https://anaconda.org/hep-forge/troll).
+| Architecture | Latest published |
+|--------------|------------------|
+| linux-amd64 (`linux-64`) | ✅ `3.3` |
+| linux-arm64 (`linux-aarch64`) | ✅ `3.3` |
+
+_As of the last feedstock render; the badges above are live._
 
 
 ## Install
