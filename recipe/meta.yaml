@@ -11,14 +11,18 @@ package:
   version: {{ environ.get('ANACONDA_VERSION', version)|replace("-", ".") }}
 
 source:
-  url: "https://www.roma1.infn.it/~bonvini/troll/downloads/TROLL.v{{ version }}.tgz"
+  url:
+    - "https://www.roma1.infn.it/~bonvini/troll/downloads/TROLL.v{{ version }}.tgz"
+    # mirror of the unmodified upstream tarball (same sha256), for when the INFN server is down
+    - "https://github.com/hep-forge/troll-feedstock/releases/download/{{ version }}/TROLL.v{{ version }}.tgz"
   {% if versions.get(version, None) %}
   sha256: {{ versions.get(version) }}
   {% endif %}
   patches:
     # Drell-Yan with a different PDF set for each hadron (collider twoSets,
     # Resummation::SetSecondHadronPDF, troll-drellyan --pdf-set2): pion beam on a
-    # nuclear target. Source branch: pion-nucleus-beams.
+    # nuclear target. Backward compatible (pp, ppbar, pd unchanged).
+    # Source: https://gitlab.cern.ch/meyerma/troll, branch pion-nucleus-beams.
     - patches/two-pdf-sets.patch
 
 build:
