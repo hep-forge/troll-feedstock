@@ -1,0 +1,322 @@
+From 48e825ad7b86bd5c2ec5b133993c9ef83233c710 Mon Sep 17 00:00:00 2001
+From: Marco Meyer-Conde <marco.meyer@glitchr.io>
+Date: Sat, 24 Oct 2026 13:19:50 +0900
+Subject: [PATCH] Drell-Yan with a different PDF set for each hadron
+
+A new collider, twoSets, takes hadron 1 from the PDF set the Resummation is
+built with and hadron 2 from a second set given with
+Resummation::SetSecondHadronPDF(). It covers fixed-target Drell-Yan such as
+a pion beam on a nuclear target (pi- W for E615 and NA10), where the two
+hadrons have nothing in common. alpha_s and the quark masses stay those of
+the first set. pp, ppbar and pd are unchanged.
+
+The second set reaches lumi_DY through the Lum_inclusive/Lum_rapidity
+helpers; a twoSets collider without a second set aborts.
+
+example_DrellYan: -2/--pdf-set2 <set> selects it.
+
+Check: twoSets with the same set on both sides reproduces the pp run to all
+printed digits (M = 6 GeV, Y = 0.3, sqrt(s) = 21.7 GeV: Delta K = 0.117788,
+0.0524331, 0.0142503).
+---
+ examples/example_DrellYan.cc | 15 ++++++++++++---
+ src/luminosity.cc            | 34 ++++++++++++++++++----------------
+ src/luminosity.hh            |  4 +++-
+ src/resummation.cc           | 36 ++++++++++++++++++++++--------------
+ src/resummation.hh           |  4 ++++
+ 5 files changed, 59 insertions(+), 34 deletions(-)
+
+diff --git a/examples/example_DrellYan.cc b/examples/example_DrellYan.cc
+index 4fa9c1a..f21bd97 100644
+--- a/examples/example_DrellYan.cc
++++ b/examples/example_DrellYan.cc
+@@ -28,6 +28,7 @@ void print_usage() {
+   cout << endl
+        << "Usage:" << endl
+        << " -p  --pdf-set <set>     specify PDFs being used (default \"NNPDF23_nnlo_as_0118\")" << endl
++       << " -2  --pdf-set2 <set>    PDFs of hadron 2, if different (e.g. a nuclear target under a pion beam)" << endl
+        << " -E  --Ecm <energy>      set collider energy [GeV]" << endl
+        << " -m  --mass <mass>       set Drell-Yan pair invariant mass [GeV]" << endl
+        << " -Y  --rapidity <rap>    set Drell-Yan pair rapidity Y (if not set, it resums the invariant mass distribution)" << endl
+@@ -48,12 +49,14 @@ double muFrat = 1;
+ bool g0exp = false;
+ int prescr = 2;
+ bool doRapDistr = false;
++string PDFset2 = "";
+ 
+ const string sorder[4] = {"LO", "NLO", "NNLO", "NNNLO"};
+ void read_arguments(int argc, char* argv[], double &mH, double &sqrts, string &set, double &Y) {
+-  const char* const short_options = "hp:f:r:m:E:P:gY:";
++  const char* const short_options = "hp:2:f:r:m:E:P:gY:";
+   const struct option long_options[] = { { "help", 0, NULL, 'h' },
+ 					 { "pdf-set", 1, NULL, 'p' },
++					 { "pdf-set2", 1, NULL, '2' },
+ 					 { "fact", 1, NULL, 'f' },
+ 					 { "ren", 1, NULL, 'r' },
+ 					 { "mass", 1, NULL, 'm' },
+@@ -73,6 +76,9 @@ void read_arguments(int argc, char* argv[], double &mH, double &sqrts, string &s
+       sset << optarg;
+       set = sset.str();
+       break;
++    case '2':
++      PDFset2 = optarg;
++      break;
+     case 'f':
+       muFrat = strtod(optarg, NULL);
+       break;
+@@ -146,7 +152,8 @@ int main (int argc, char* argv[]) {
+   //
+   using namespace resumm;
+   //dQCDResummation res(DYpositive, LHC, PDFset, 0);
+-  dQCDResummation res(DYneutral, LHC, PDFset, 0);
++  dQCDResummation res(DYneutral, PDFset2.empty() ? LHC : twoSets, PDFset, 0);
++  if(!PDFset2.empty()) res.SetSecondHadronPDF(PDFset2, 0);
+   //
+   res.SetLogCounting(primed);
+   //
+@@ -160,7 +167,9 @@ int main (int argc, char* argv[]) {
+ 
+ 
+ 
+-  cout << "PDFset: " << PDFset << endl
++  cout << "PDFset: " << PDFset << endl;
++  if(!PDFset2.empty()) cout << "PDFset of hadron 2: " << PDFset2 << endl;
++  cout
+        << "Renormalization scale muR = " << muRrat << " * m" << endl
+        << "Factorization   scale muF = " << muFrat << " * m" << endl;
+   if(doRapDistr) cout << "Y = " << Y << endl;
+diff --git a/src/luminosity.cc b/src/luminosity.cc
+index 35032d2..029d5e5 100644
+--- a/src/luminosity.cc
++++ b/src/luminosity.cc
+@@ -316,16 +316,22 @@ namespace lumi {
+   double VsqAsq_d(double M, double alpha){
+     return EW::e_d*EW::e_d + N_Zgamma(M,alpha)*EW::e_d*v_d_Z + N_Z(M,alpha)*(v_d_Z*v_d_Z + a_d_Z*a_d_Z) ;
+   }
+-  double lumi_DYn(PDFs *pdfs, double x1, double x2, double mu, double M, collider c) { // neutral (Z+gamma)
++  // PDFs of hadron 2: from the same set (pp, ppbar, pd) or from a second set (twoSets)
++  void hadron2(PDFs *pdfs, PDFs *pdfs2, double x2, double mu, double *xfx2, collider c) {
++    if     (c==pp)    pdfs->xfx(x2, mu, xfx2);
++    else if(c==ppbar) pdfs->xfx(x2, mu, xfx2, Proton, true);
++    else if(c==pd)    pdfs->xfx(x2, mu, xfx2, Deuteron);
++    else if(c==twoSets && pdfs2) pdfs2->xfx(x2, mu, xfx2);
++    else abort(); // twoSets without a second set, or a DIS collider
++  }
++  double lumi_DYn(PDFs *pdfs, double x1, double x2, double mu, double M, collider c, PDFs *pdfs2) { // neutral (Z+gamma)
+     //double alpha = EW::alpha_QED(M);
+     double alpha = EW::alpha_em_Z;
+     double pref_u = VsqAsq_u(M,alpha);
+     double pref_d = VsqAsq_d(M,alpha);
+     double xfx1[13], xfx2[13];
+     pdfs->xfx(x1, mu, xfx1);
+-    if     (c==pp)    pdfs->xfx(x2, mu, xfx2);
+-    else if(c==ppbar) pdfs->xfx(x2, mu, xfx2, Proton, true);
+-    else if(c==pd)    pdfs->xfx(x2, mu, xfx2, Deuteron);
++    hadron2(pdfs, pdfs2, x2, mu, xfx2, c);
+     double res = 0;
+     for(int i=1; i<=6; i++) {
+       if(i%2==0) res += pref_u * (xfx1[6+i]*xfx2[6-i] + xfx1[6-i]*xfx2[6+i]);
+@@ -333,12 +339,10 @@ namespace lumi {
+     }
+     return res/x1/x2;
+   }
+-  double lumi_DYp(PDFs *pdfs, double x1, double x2, double mu, double M, collider c) { // positive (W+)
++  double lumi_DYp(PDFs *pdfs, double x1, double x2, double mu, double M, collider c, PDFs *pdfs2) { // positive (W+)
+     double xfx1[13], xfx2[13];
+     pdfs->xfx(x1, mu, xfx1);
+-    if     (c==pp)    pdfs->xfx(x2, mu, xfx2);
+-    else if(c==ppbar) pdfs->xfx(x2, mu, xfx2, Proton, true);
+-    else if(c==pd)    pdfs->xfx(x2, mu, xfx2, Deuteron);
++    hadron2(pdfs, pdfs2, x2, mu, xfx2, c);
+     double res = 0;
+     res = 0
+       + xfx1[6+2] * ( V_ud_sq * xfx2[6-1] + V_us_sq * xfx2[6-3] + V_ub_sq * xfx2[6-5] )
+@@ -349,12 +353,10 @@ namespace lumi {
+       + xfx2[6+6] * ( V_td_sq * xfx1[6-1] + V_ts_sq * xfx1[6-3] + V_tb_sq * xfx1[6-5] );
+     return res/x1/x2;
+   }
+-  double lumi_DYm(PDFs *pdfs, double x1, double x2, double mu, double M, collider c) { // negative (W-)
++  double lumi_DYm(PDFs *pdfs, double x1, double x2, double mu, double M, collider c, PDFs *pdfs2) { // negative (W-)
+     double xfx1[13], xfx2[13];
+     pdfs->xfx(x1, mu, xfx1);
+-    if     (c==pp)    pdfs->xfx(x2, mu, xfx2);
+-    else if(c==ppbar) pdfs->xfx(x2, mu, xfx2, Proton, true);
+-    else if(c==pd)    pdfs->xfx(x2, mu, xfx2, Deuteron);
++    hadron2(pdfs, pdfs2, x2, mu, xfx2, c);
+     double res = 0;
+     res = 0
+       + xfx1[6-2] * ( V_ud_sq * xfx2[6+1] + V_us_sq * xfx2[6+3] + V_ub_sq * xfx2[6+5] )
+@@ -366,11 +368,11 @@ namespace lumi {
+     return res/x1/x2;
+   }
+   //
+-  double lumi_DY(PDFs *pdfs, double x1, double x2, double mu, double M, process p, collider c) {
++  double lumi_DY(PDFs *pdfs, double x1, double x2, double mu, double M, process p, collider c, PDFs *pdfs2) {
+     double res;
+-    if(p == DYneutral) res = lumi_DYn(pdfs, x1,x2,mu,M,c);
+-    else if(p == DYpositive) res = lumi_DYp(pdfs, x1,x2,mu,M,c);
+-    else if(p == DYnegative) res = lumi_DYm(pdfs, x1,x2,mu,M,c);
++    if(p == DYneutral) res = lumi_DYn(pdfs, x1,x2,mu,M,c,pdfs2);
++    else if(p == DYpositive) res = lumi_DYp(pdfs, x1,x2,mu,M,c,pdfs2);
++    else if(p == DYnegative) res = lumi_DYm(pdfs, x1,x2,mu,M,c,pdfs2);
+     else abort();
+     return res;
+   }
+diff --git a/src/luminosity.hh b/src/luminosity.hh
+index 568789e..83e5715 100644
+--- a/src/luminosity.hh
++++ b/src/luminosity.hh
+@@ -37,6 +37,8 @@ enum collider {
+   LHC      =  0,
+   Tevatron =  1,
+   pd       =  2,
++  twoSets  =  3, // hadron 1 from the first PDF set, hadron 2 from a second one (e.g. a pion beam on a
++                 // nuclear target); set it with Resummation::SetSecondHadronPDF()
+   // for DIS
+   proton   = -1,
+   deuteron = -2,
+@@ -52,7 +54,7 @@ enum DISobservable {
+ namespace lumi {
+ 
+   extern double lumi_gg (PDFinterface::PDFs *pdfs, double x1, double x2, double mu);
+-  extern double lumi_DY (PDFinterface::PDFs *pdfs, double x1, double x2, double mu, double M, process p, collider c);
++  extern double lumi_DY (PDFinterface::PDFs *pdfs, double x1, double x2, double mu, double M, process p, collider c, PDFinterface::PDFs *pdfs2=NULL);
+   extern double lumi_DIS(PDFinterface::PDFs *pdfs, double x, double mu, int nf, process p, collider c, double y, double TMoQ=0, double mcoQ=0); // nf is the number of active flavours
+ 
+   extern void SetZcoupling(double); // 1: SM, 0: excludes the Z
+diff --git a/src/resummation.cc b/src/resummation.cc
+index 5a40648..b139981 100644
+--- a/src/resummation.cc
++++ b/src/resummation.cc
+@@ -50,6 +50,7 @@ namespace resumm {
+     proc = p;
+     coll = c;
+     pdfs = new PDFs(PDFset, PDFmember);
++    pdfs2 = NULL;
+     InitMasses        (pdfs->getQuarkMass     (4), pdfs->getQuarkMass     (5), pdfs->getQuarkMass     (6));
+     InitMassThresholds(pdfs->getQuarkThreshold(4), pdfs->getQuarkThreshold(5), pdfs->getQuarkThreshold(6));
+     Hmtop = pdfs->getQuarkMass(6);
+@@ -103,6 +104,12 @@ namespace resumm {
+     Hmtop = pdfs->getQuarkMass(6);
+   }
+ 
++  void Resummation::SetSecondHadronPDF(string PDFset, int PDFmember) {
++    delete pdfs2;
++    pdfs2 = new PDFs(PDFset, PDFmember);
++    forceredo = true;
++  }
++
+   void Resummation::SetMtop(double mt) {
+     Hmtop = mt;
+   }
+@@ -279,7 +286,7 @@ namespace resumm {
+ 
+ 
+   // for inclusive cross-section (invariant mass distribution)
+-  struct s_lum  { double x, mu, M; process p; collider c; PDFs *pdf; };
++  struct s_lum  { double x, mu, M; process p; collider c; PDFs *pdf; PDFs *pdf2; };
+   double Lum_integrand(double z, void* par) {
+     s_lum pars = *(s_lum *) par;
+     double x   = pars.x;
+@@ -288,43 +295,44 @@ namespace resumm {
+     process p  = pars.p;
+     collider c = pars.c;
+     PDFs *pdf  = pars.pdf;
++    PDFs *pdf2 = pars.pdf2;
+     double lum;
+     if(p == ggH || p == ggA) lum = lumi::lumi_gg(pdf,z,x/z,mu)/z;
+-    else lum = lumi::lumi_DY(pdf,z,x/z,mu,M,p,c)/z;
++    else lum = lumi::lumi_DY(pdf,z,x/z,mu,M,p,c,pdf2)/z;
+     return lum;
+   }
+-  double Lum_inclusive(PDFs *pdf, double x, double mu, double M, process p, collider c, int nf, double xTM, double y, double mc) {
++  double Lum_inclusive(PDFs *pdf, double x, double mu, double M, process p, collider c, int nf, double xTM, double y, double mc, PDFs *pdf2=NULL) {
+     if(p < 0) { // DIS
+       double TMtau = sqrt(1+4*xTM*xTM/M/M);
+       return lumi::lumi_DIS(pdf,x,mu,nf,p,c,y,TMtau,mc/M);
+     }
+     double precision = 1e-4;
+-    s_lum pars = {x, mu, M, p, c, pdf};
++    s_lum pars = {x, mu, M, p, c, pdf, pdf2};
+     gsl_error_handler_t *old_handler = gsl_set_error_handler (NULL);
+     gsl_set_error_handler_off();
+     double res = integration::gauss(Lum_integrand,x,1.,precision,NULL,&pars);
+     gsl_set_error_handler (old_handler);
+     return res;
+   }
+-  double Lum_inclusive_rescaled(PDFs *pdf, double x, double mu, double M, process p, collider c, int nf, double xTM, double y, double mc) {
++  double Lum_inclusive_rescaled(PDFs *pdf, double x, double mu, double M, process p, collider c, int nf, double xTM, double y, double mc, PDFs *pdf2=NULL) {
+     //if(p < 0) { // DIS
+     //  x *= 2./(1.+sqrt(1.+4.*TM*TM/M/M)); // target mass correction
+     //}
+-    return Lum_inclusive(pdf, x, mu, M, p, c, nf, xTM, y, mc);
++    return Lum_inclusive(pdf, x, mu, M, p, c, nf, xTM, y, mc, pdf2);
+   }
+   // for rapidity distributions
+-  double Lum_rapidity(PDFs *pdf, double x, double Y, double mu, double M, process p, collider c) {
++  double Lum_rapidity(PDFs *pdf, double x, double Y, double mu, double M, process p, collider c, PDFs *pdf2=NULL) {
+     double x1 = sqrt(x) * exp(Y);
+     double x2 = x/x1;  //sqrt(x) * exp(-Y);
+     if(x1>=1 || x2>=1) return 0;
+     double lum;
+     if(p == ggH || p==ggA) lum = lumi::lumi_gg(pdf,x1,x2,mu);
+-    else lum = lumi::lumi_DY(pdf,x1,x2,mu,M,p,c);
++    else lum = lumi::lumi_DY(pdf,x1,x2,mu,M,p,c,pdf2);
+     return lum;
+   }
+-  double Lum_rapidity_rescaled(PDFs *pdf, double x, double Y, double mu, double M, process p, collider c) {
++  double Lum_rapidity_rescaled(PDFs *pdf, double x, double Y, double mu, double M, process p, collider c, PDFs *pdf2=NULL) {
+     x *= exp(-2*fabs(Y)); // rescaling!!
+-    return Lum_rapidity(pdf, x, Y, mu, M, p, c);
++    return Lum_rapidity(pdf, x, Y, mu, M, p, c, pdf2);
+   }
+   // for general use
+   double Lum(double x, void *p) {
+@@ -335,18 +343,18 @@ namespace resumm {
+     }
+     double lum=0;
+     if(res->doRapidityDistr)
+-      lum = Lum_rapidity (res->pdfs, x, res->rapY, res->muF, res->M, res->proc, res->coll);
++      lum = Lum_rapidity (res->pdfs, x, res->rapY, res->muF, res->M, res->proc, res->coll, res->pdfs2);
+     else
+-      lum = Lum_inclusive(res->pdfs, x, res->muF, res->M, res->proc, res->coll, res->nf, res->tau*res->TargetMass, res->DISy, res->mass_c);
++      lum = Lum_inclusive(res->pdfs, x, res->muF, res->M, res->proc, res->coll, res->nf, res->tau*res->TargetMass, res->DISy, res->mass_c, res->pdfs2);
+     return lum;
+   }
+   double LumRescaled(double x, void *p) {
+     Resummation *res = (Resummation *) p;
+     double lum=0;
+     if(res->doRapidityDistr)
+-      lum = Lum_rapidity_rescaled (res->pdfs, x, res->rapY, res->muF, res->M, res->proc, res->coll);
++      lum = Lum_rapidity_rescaled (res->pdfs, x, res->rapY, res->muF, res->M, res->proc, res->coll, res->pdfs2);
+     else
+-      lum = Lum_inclusive_rescaled(res->pdfs, x, res->muF, res->M, res->proc, res->coll, res->nf, res->tau*res->TargetMass, res->DISy, res->mass_c);
++      lum = Lum_inclusive_rescaled(res->pdfs, x, res->muF, res->M, res->proc, res->coll, res->nf, res->tau*res->TargetMass, res->DISy, res->mass_c, res->pdfs2);
+     return lum;
+   }
+ 
+diff --git a/src/resummation.hh b/src/resummation.hh
+index 76cb43e..4d40e30 100644
+--- a/src/resummation.hh
++++ b/src/resummation.hh
+@@ -73,6 +73,9 @@ namespace resumm {
+ 
+     // re-initialize PDFs (use it only if you need to change PDF set; however, a better practice is to use another instance of Resummation)
+     void reinitPDF(string PDFset, int PDFmember=0);
++    // PDFs of hadron 2 from another set (collider twoSets), e.g. a nuclear target under a pion beam;
++    // alpha_s and the quark masses stay those of the first set
++    void SetSecondHadronPDF(string PDFset, int PDFmember=0);
+ 
+     void InitMasses        (double mc,  double mb,  double mt );
+     void InitMassThresholds(double muc, double mub, double mut);
+@@ -135,6 +138,7 @@ namespace resumm {
+     bool expBP;
+     //
+     PDFinterface::PDFs *pdfs;
++    PDFinterface::PDFs *pdfs2; // hadron 2 for collider twoSets (NULL otherwise)
+     //
+     int interpolationMethod;
+     unsigned int Nchebyshev;
+-- 
+2.34.1
+

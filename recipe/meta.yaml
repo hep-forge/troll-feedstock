@@ -15,6 +15,11 @@ source:
   {% if versions.get(version, None) %}
   sha256: {{ versions.get(version) }}
   {% endif %}
+  patches:
+    # Drell-Yan with a different PDF set for each hadron (collider twoSets,
+    # Resummation::SetSecondHadronPDF, troll-drellyan --pdf-set2): pion beam on a
+    # nuclear target. Source branch: pion-nucleus-beams.
+    - patches/two-pdf-sets.patch
 
 build:
   number: 0
@@ -40,6 +45,7 @@ test:
     - test -f $PREFIX/lib/libTROLL.a
     - test -f $PREFIX/include/TROLL/src/resummation.hh
     - troll-drellyan -h
+    - troll-drellyan -h | grep -q -- --pdf-set2
     - troll-dis -h
 
 about:
